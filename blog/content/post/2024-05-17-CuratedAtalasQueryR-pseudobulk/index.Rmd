@@ -1,0 +1,468 @@
+---
+title: "CuratedAtlasQueryR pseudobulk query and gene expression case study"
+author: "Mengyuan Shen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+### Introduction
+In this report, we explore the significance of user-friendly large-scale biological data analysis. With the new `get_pseudobulk` API, users now have access to summarized data from over 30 million cells. This feature facilitates advanced downstream analysis such as differential expression analysis.
+
+### Installation
+```{r, eval=FALSE}
+devtools::install_github("stemangiola/CuratedAtlasQueryR")
+```
+
+
+### Load the packages
+```{r, message=FALSE, warning=FALSE}
+library(CuratedAtlasQueryR)
+library(SingleCellExperiment)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(GGally)
+library(dittoSeq)
+library(tidybulk)
+library(tidySummarizedExperiment)
+library(ggforce)
+library(RColorBrewer)
+library(HDF5Array)
+library(singscore)
+library(forcats)
+```
+
+
+### Access metadata
+`get_metadata()` downloads the cellxgene and fibrosis metadata from cloud and stores in the defined cache directory
+```{r eval=FALSE}
+my_cache <- "/vast/scratch/users/shen.m/CuratedAtlasQueryR/pseudobulk"
+metadata <- get_metadata(cache_directory = my_cache)
+metadata
+```
+
+```{r echo=FALSE}
+samples <- c(
+  "69eb218e118cae6dd788c3d61e916baa",
+  "2dabf16ac7b3d0d83b5ee40502f766a3",
+  "ab356a84642ba093b27947970a4a3aaf",
+  "872f96781988b16d6b00d06f0c55a0dc",
+  "0b55c2cafcc763c621f7763e0b534dd1",
+  "4a8c7987fcf34a8d68f21ebaf94d9203",
+  "b029d5ec2ea5c7f763f8d40b5bdc1a91",
+  "928617c22085ebec4c67ac4e4369714c",
+  "fa7008f3781d1db39f88fc044cc2a29b",
+  "ebe739affde93c1a985c92398822e34c",
+  "ed212967bdebee0a69da7fadbe7cd5da",
+  "45160921927eda11f62a7d06129c66ee",
+  "879abdc1f3a23a71d0418b5dd7e8f713",
+  "3bab99f2167d42c39917f5c935779096",
+  "e1b18d998d22dd607af5418d15d369fb",
+  "2f275671f6f8f547f0b41d264e58ccd2",
+  "516350a4f6a2d659b2204c1b0b1ac533",
+  "516fde254a540a487190e79540cc6620",
+  "bf4390b13486ee5e0e47b1a2f15e79a0",
+  "17ea48f5316efeeb337d58dcde24c9cf",
+  "8786453b8e1bd42df585e51f54c2e879",
+  "815313cfdcba3f5e1bfac744fb60d13b",
+  "373b7242564ea54a34e832dfa145e8df",
+  "78d7549b89aeb46b17cffa3021a3f94b"
+)
+file_ids <- c(# the first two file_ids are missed completely in pseudobulk data
+              "3fe53a40-38ff-4f25-b33b-e4d60f2289ef", 
+              "5c1cc788-2645-45fb-b1d9-2f43d368bba8",
+              # duplicate row.names in the back end
+              "56e0359f-ee8d-4ba5-a51d-159a183643e5")
+my_cache <- "/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data"
+metadata <- get_metadata(cache_directory = my_cache) |> filter(!sample_ %in% samples) |> filter(!file_id %in% file_ids)
+metadata
+```
+The column definition for the metadata can be found: https://stemangiola.github.io/CuratedAtlasQueryR/#cell-metadata
+
+### Explore metadata and collect pseudobulk summarised counts from `CuratedAtlasQuery` 
+#### Explore tissue
+```{r}
+metadata <- metadata |> filter(tissue_harmonised == 'lung') |> head(10000)
+```
+
+#### Collect pseudobulk raw counts and quantile normalised counts
+```{r eval=FALSE}
+counts <- metadata |> 
+  get_pseudobulk(cache_directory = my_cache, assays = c("counts","quantile_normalised") )
+```
+
+```{r echo=FALSE}
+counts <- loadHDF5SummarizedExperiment("/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data/lung_merged_counts")
+```
+
+```{r}
+counts
+```
+
+#### Explore disease samples
+```{r}
+counts |> distinct(.sample, disease) |> count(disease)
+```
+
+
+### Differential expression analysis
+The following functions are from package`tidybulk`, taking a `tbl` input (with at least three columns for sample, feature and transcript abundance) or `SummarizedExperiment` as input.\
+
+* `keep_abundant()` returns a consistent object (to the input) with additional columns for the statistics from the hypothesis test.
+* `scale_abundance()` scales transcript abundance compansating for sequencing depth.
+* `reduce_dimensions()` calculates the reduced dimensional space of the transcript abundance.
+* `pivot_sample()` returns a `tbl` with only sample-related columns.
+* `test_differential_abundance()` performs differential transcription testing using edgeR quasi-likelihood (QLT), edgeR likelihood-ratio (LR), limma-voom, limma-voom-with-quality-weights or DESeq2.
+* `pivot_transcript()` returns a `tbl` with only transcript-related columns.
+
+```{r echo=FALSE, warning=FALSE}
+# Use colourblind-friendly colours
+friendly_cols <- dittoSeq::dittoColors()
+
+# Set theme
+custom_theme <-
+  list(
+    scale_fill_manual(values = friendly_cols),
+    scale_color_manual(values = friendly_cols),
+    theme_bw() +
+      theme(
+        panel.border = element_blank(),
+        axis.line = element_line(),
+        panel.grid.major = element_line(size = 0.2),
+        panel.grid.minor = element_line(size = 0.1),
+        text = element_text(size = 12),
+        legend.position = "right",
+        strip.background = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 10, r = 10, b = 10, l = 10)),
+        axis.title.y = element_text(margin = margin(t = 10, r = 10, b = 10, l = 10)),
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        strip.text.x = element_text(size = 8),
+        legend.spacing = unit(0.1, "cm"),            # Closer spacing between legend items
+        legend.margin = margin(2, 2, 2, 2, unit = "pt"),
+        plot.title = element_text(hjust = 0.5)
+      )
+  )
+```
+
+#### Counts normalisation
+Visualise the difference in abundance densities before and after scaling by plotting:\
+
+* Raw counts density
+* Raw counts scaled density
+* Quantile normalised density
+
+```{r echo=FALSE, warning=FALSE}
+# DelayArray transformation to matrix
+counts@assays@data$counts <- counts@assays@data$counts |> as.matrix()
+```
+
+```{r Counts_normalisation, fig.width=10, fig.height=8 }
+counts |> keep_abundant(factor_of_interest = disease) |> 
+  scale_abundance(.subset_for_scaling = TRUE) |>
+  pivot_longer(
+  cols = c("counts", "quantile_normalised", "counts_scaled"),
+  names_to = "source",
+  values_to = "abundance"
+) |>
+  
+  # Plotting
+  ggplot(aes(x = abundance + 1, color = sample_)) +
+  geom_density() +
+  facet_wrap( ~ source) +
+  scale_x_log10() +
+  custom_theme
+```
+
+In the curated atlas, the distribution of the scaled counts and quantile normalised counts are not very different to each other. Comparing to raw counts, both scaling and quantile normalising make the distribution similar across samples.
+
+#### Dimensionality reduction PCA visualisation
+
+Idiopathic pulmonary fibrosis (IPF) shows some degree of separation from normal in the sample, especially noticeable in certain cell types. This separation could indicate that the disease state influences the gene expression profile of these cells.
+
+##### Scaled raw counts PCA
+```{r Scaled_raw_counts_PCA}
+# Get principal components
+counts_scal_PCA <-
+  counts |> 
+  keep_abundant(factor_of_interest = disease) |>
+  scale_abundance() |>
+  reduce_dimensions(method = "PCA")
+
+counts_scal_PCA |>
+  pivot_sample() |>
+  ggplot(aes(
+    x = PC1,
+    y = PC2,
+    colour = cell_type_harmonised,
+    shape = disease
+  )) +
+  geom_point() +
+  custom_theme
+```
+
+The PCA plot indicates that same cell types tend to cluster together.
+
+#### Differential expression models
+```{r warning = FALSE}
+de_all <- counts_scal_PCA |>
+
+  # edgeR QLT
+  test_differential_abundance(
+    ~ disease + age_days + sex,
+    method = "edgeR_quasi_likelihood",
+    prefix = "edgerQLT_"
+  ) |>
+
+  # edgeR LRT
+  test_differential_abundance(
+   ~ disease + age_days + sex,
+    method = "edgeR_likelihood_ratio",
+    prefix = "edgerLR_"
+  ) |>
+
+  # limma-voom
+  test_differential_abundance(
+    ~ disease + age_days + sex,
+    method = "limma_voom",
+    prefix = "voom_"
+  ) |>
+
+  # DESeq2
+  test_differential_abundance(
+   ~ disease + age_days + sex,
+    method = "deseq2",
+    prefix = "deseq2_"
+  )
+
+```
+
+#### Comparison of methods
+The comparison help assess how similarly each pair of tests ranks the significance of gene expression differences.
+
+The correlation coefficients between edgeR QLT and edgeR LRT, suggest a very high degree of agreement, which is expected as these methods are variations of each other under the edgeR framework. Meanwhile, correlations involving limma-voom are generally lower, indicating differing sensitivities or assumptions in the statistical models used by limma compared to edgeR or DESeq2.
+```{r differential_expression_model_comparison, fig.width=10, fig.height=8}
+de_all |>
+  pivot_transcript() |>
+  select(edgerQLT_PValue, edgerLR_PValue, voom_P.Value, deseq2_pvalue, .feature) |>
+  ggpairs(1:4,
+          mapping = aes(alpha = 0.2),
+          lower = list(continuous = wrap("points", size = 0.4, alpha = 0.2)
+                       )
+          )
+```
+
+#### Volcano plots
+```{r}
+# run default edgeR method
+counts_de <- counts_scal_PCA |>
+  test_differential_abundance(~ disease + age_days + sex )
+```
+
+```{r}
+topgenes_symbols <- counts_de |>
+    pivot_transcript() |>
+    arrange(PValue) |>
+    head(6) |> pull(.feature)
+topgenes_symbols
+```
+
+```{r volcano_plot}
+counts_de |>
+    pivot_transcript() |>
+    
+    # Subset data
+    mutate(significant = FDR < 0.05 & abs(logFC) >= 2) |>
+    mutate(.feature = ifelse(.feature %in% topgenes_symbols, as.character(.feature), "")) |>
+    
+    # Plot
+    ggplot(aes(x = logFC, y = PValue, label = .feature)) +
+    geom_point(aes(color = significant, size = significant, alpha = significant)) +
+    geom_text_repel() +
+    
+    # Custom scales
+    custom_theme +
+    scale_y_continuous(trans = trans_reverser("log10")) +
+    scale_color_manual(values = c("black", "#e11f28")) +
+    scale_size_discrete(range = c(0, 2))
+```
+
+In the volcano plot, top genes are annotated. The IGHG4 gene shows both significant changes in expression and high fold changes.
+
+### Analysis of a single gene across the curated data
+#### Collect pseudobulk counts for TGFB and MUC5B genes
+
+```{r eval=FALSE}
+my_cache <- "/vast/scratch/users/shen.m/CuratedAtlasQueryR/pseudobulk"
+metadata <- get_metadata(cache_directory = my_cache)
+metadata
+```
+
+```{r echo=FALSE}
+metadata <- get_metadata(cache_directory = my_cache) |> filter(!sample_ %in% samples) |> filter(!file_id %in% file_ids)
+```
+
+```{r eval=FALSE}
+MUC5B_merged_counts <- metadata |> 
+  get_pseudobulk(cache_directory = my_cache, assays = c("counts", "quantile_normalised"), feature = "MUC5B")
+```
+
+```{r echo=FALSE, warning=FALSE}
+MUC5B_merged_counts <- loadHDF5SummarizedExperiment("/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data/MUC5B_merged_counts")
+```
+
+```{r}
+MUC5B_merged_counts
+```
+
+
+```{r eval=FALSE}
+TGFB1_merged_counts <- metadata |> 
+  get_pseudobulk(cache_directory = my_cache, assays = c("counts", "quantile_normalised"), feature = "TGFB1")
+```
+
+```{r echo=FALSE, warning=FALSE}
+TGFB1_merged_counts <- loadHDF5SummarizedExperiment("/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data/TGFB1_merged_counts")
+```
+
+```{r}
+TGFB1_merged_counts
+```
+
+The query illustrates the expression of a single gene across 133,133 pseudo samples, encompassing 156 cell types and 45 organs.
+
+```{r echo=FALSE, warning=FALSE}
+# DelayArray transformation to matrix
+MUC5B_merged_counts@assays@data$counts <- MUC5B_merged_counts@assays@data$counts |> as.matrix()
+MUC5B_merged_counts@assays@data$quantile_normalised <- MUC5B_merged_counts@assays@data$quantile_normalised |> as.matrix()
+TGFB1_merged_counts@assays@data$counts <- TGFB1_merged_counts@assays@data$counts  |> as.matrix()
+TGFB1_merged_counts@assays@data$quantile_normalised <- TGFB1_merged_counts@assays@data$quantile_normalised |> as.matrix()
+```
+
+
+#### Visualising genes expression in cells and tissues
+
+##### MUC5B gene
+MUC5B (Mucin 5B) is known to play a crucial role in the production of mucus, which is essential for protecting and lubricating the surfaces of the respiratory, digestive, and reproductive systems.\
+* High expression in Esophagus and Trachea tissue is consistent with the role of MUC5B in mucus production, which is essential for protecting the respiratory tract by clearing pathogens and particulates.\
+* Goblet and Secretory cells are known for their role in mucus secretion, which aligns with the high expression of MUC5B.
+
+```{r MUC5B_expression_across_tissue, fig.width=20, fig.height=12}
+MUC5B_merged_counts |> 
+  filter(quantile_normalised != 0) |>
+  group_by(tissue_harmonised) |>
+  mutate(median_expression = median(quantile_normalised)) |>
+  ungroup() |>
+  ggplot(aes(
+    x = fct_reorder(tissue_harmonised, median_expression, .desc = TRUE),
+    y = quantile_normalised,
+    fill = tissue_harmonised
+  )) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 1)) +
+  ggtitle("MUC5B expression across tissues")
+```
+
+```{r MUC5B_expression_across_cell_types, fig.width=30, fig.height=20}
+MUC5B_merged_counts |> 
+  filter(quantile_normalised != 0) |>
+  group_by(cell_type_harmonised) |>
+  mutate(median_expression = median(quantile_normalised)) |>
+  ungroup() |>
+  ggplot(aes(x = fct_reorder(cell_type_harmonised, median_expression, .desc = TRUE), 
+             y = quantile_normalised, 
+             fill = cell_type_harmonised)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 2)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1)) +
+  ggtitle("MUC5B expression across cell types")
+```
+
+##### TGFB1 gene
+TGFB1 (Transforming Growth Factor Beta 1) play a crucial role in various cellular processes, including cell growth, differentiation, apoptosis, and immune response. The variability in its expression across different cell types highlights its diverse roles in different cellular contexts.\
+The boxplots indicate an overview of TGFB1 gene expression across various cell types and tissues:\
+* High expression in Mucosa and Skeletal Muscle suggests that the TGFB1 gene is important for maintaining structural integrity and responding to injuries.\
+* High expression in Megakaryocytes and Platelets suggests that the TGFB1 gene is essential for blood clotting and wound healing.
+
+```{r TGFB1_expression_across_tissue, fig.width=20, fig.height=12}
+TGFB1_merged_counts |>
+  filter(quantile_normalised != 0) |>
+  group_by(tissue_harmonised) |>
+  mutate(median_expression = median(quantile_normalised)) |>
+  ungroup() |>
+  ggplot(aes(
+    x = fct_reorder(tissue_harmonised, median_expression, .desc = TRUE),
+    y = quantile_normalised,
+    fill = tissue_harmonised
+  )) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 1)) +
+  ggtitle("TGFB1 expression across tissues")
+```
+
+```{r TGFB1_expression_across_cell_types, fig.width=30, fig.height=20}
+TGFB1_merged_counts |>
+  filter(quantile_normalised != 0) |>
+  group_by(cell_type_harmonised) |>
+  mutate(median_expression = median(quantile_normalised)) |>
+  ungroup() |>
+  ggplot(aes(x = fct_reorder(cell_type_harmonised, median_expression, .desc = TRUE), 
+             y = quantile_normalised, 
+             fill = cell_type_harmonised)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 3)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1)) +
+  ggtitle("TGFB1 expression across cell types")
+```
+
+### Signature calculation across the curated atlas
+```{r eval=FALSE}
+meta <- metadata |> filter(tissue_harmonised == "lung" & 
+                           cell_type_harmonised == "cd8 tem")
+sig_calc_pseudobulk <- meta |> get_pseudobulk(cache_directory = my_cache, assays = "counts")
+```
+
+```{r echo=FALSE}
+sig_calc_pseudobulk <- loadHDF5SummarizedExperiment("/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data/sig_calc_pseudobulk")
+```
+
+```{r}
+sig_calc_pseudobulk
+```
+
+```{r}
+# load calculated signature 
+scores <- read.table("/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data/ResExhMarkers_CD8_CLs_LCM.txt", header = TRUE, sep = "\t")
+scores |> head()
+```
+The signature represents T cell exhaustion, referenced in the paper: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-018-2435-4
+
+```{r Signature_calculation}
+my_matrix <- sig_calc_pseudobulk@assays@data$counts
+
+rownames(my_matrix) <- rownames(sig_calc_pseudobulk)
+colnames(my_matrix) <- colnames(sig_calc_pseudobulk)
+
+my_matrix[rowSums(my_matrix) != 0 |
+            rownames(my_matrix) %in% scores$gene, , drop = FALSE] |>
+  as.matrix() |>
+  rankGenes() |>
+  simpleScore(
+    upSet = scores$gene,
+    knownDirection = T,
+    centerScore = F
+  ) |>
+  as_tibble(rownames = "sample_") |> left_join(
+    sig_calc_pseudobulk |> tidybulk::select(sample_, disease, cell_type_harmonised, sample_identifier),
+    by = c("sample_" = "sample_identifier")
+  )  |> ggplot(aes(x = disease, y = TotalScore, fill = disease)) + geom_jitter() + custom_theme
+```
+
+This plot visualises the total score of a signature that represents T cell exhaustion across different lung-related diseases and conditions. Sarcoidosis shows more concentrated and relatively higher score ranges, indicating less variability among the samples compared to other diseases. This suggests a more uniform expression of the signature being analysed within these specific conditions.

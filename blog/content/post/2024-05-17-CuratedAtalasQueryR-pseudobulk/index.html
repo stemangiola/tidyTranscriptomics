@@ -1,0 +1,559 @@
+---
+title: "CuratedAtlasQueryR pseudobulk query and gene expression case study"
+author: "Mengyuan Shen"
+date: "2024-05-17"
+output: html_document
+---
+
+
+
+<div id="introduction" class="section level3">
+<h3>Introduction</h3>
+<p>In this report, we explore the significance of user-friendly large-scale biological data analysis. With the new <code>get_pseudobulk</code> API, users now have access to summarized data from over 30 million cells. This feature facilitates advanced downstream analysis such as differential expression analysis.</p>
+</div>
+<div id="installation" class="section level3">
+<h3>Installation</h3>
+<pre class="r"><code>devtools::install_github(&quot;stemangiola/CuratedAtlasQueryR&quot;)</code></pre>
+</div>
+<div id="load-the-packages" class="section level3">
+<h3>Load the packages</h3>
+<pre class="r"><code>library(CuratedAtlasQueryR)
+library(SingleCellExperiment)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(GGally)
+library(dittoSeq)
+library(tidybulk)
+library(tidySummarizedExperiment)
+library(ggforce)
+library(RColorBrewer)
+library(HDF5Array)
+library(singscore)
+library(forcats)</code></pre>
+</div>
+<div id="access-metadata" class="section level3">
+<h3>Access metadata</h3>
+<p><code>get_metadata()</code> downloads the cellxgene and fibrosis metadata from cloud and stores in the defined cache directory</p>
+<pre class="r"><code>my_cache &lt;- &quot;/vast/scratch/users/shen.m/CuratedAtlasQueryR/pseudobulk&quot;
+metadata &lt;- get_metadata(cache_directory = my_cache)
+metadata</code></pre>
+<pre><code>## # Source:   SQL [?? x 56]
+## # Database: DuckDB v0.9.2 [shen.m@Darwin 23.3.0:R 4.3.2/:memory:]
+##    cell_      cell_type cell_type_harmonised confidence_class file_id file_id_db
+##    &lt;chr&gt;      &lt;chr&gt;     &lt;chr&gt;                           &lt;dbl&gt; &lt;chr&gt;   &lt;chr&gt;     
+##  1 AAACCTGAG… AT2       at2                                 1 GSE122… 12eb5fe25…
+##  2 AAACCTGAG… Macropha… macrophage                          1 GSE122… 4b9d4c177…
+##  3 AAACCTGCA… Macropha… macrophage                          1 GSE122… 4b9d4c177…
+##  4 AAACCTGCA… Macropha… macrophage                          1 GSE122… 4b9d4c177…
+##  5 AAACCTGCA… AT2       at2                                 1 GSE122… 12eb5fe25…
+##  6 AAACCTGCA… AT2       at2                                 1 GSE122… 12eb5fe25…
+##  7 AAACCTGGT… Macropha… macrophage                          1 GSE122… 4b9d4c177…
+##  8 AAACCTGTC… AT1       at1                                 1 GSE122… f9be50964…
+##  9 AAACGGGCA… Macropha… macrophage                          1 GSE122… 4b9d4c177…
+## 10 AAACGGGTC… Macropha… macrophage                          1 GSE122… 4b9d4c177…
+## # ℹ more rows
+## # ℹ 50 more variables: cell_annotation_blueprint_singler &lt;chr&gt;,
+## #   cell_annotation_monaco_singler &lt;chr&gt;, cell_annotation_azimuth_l2 &lt;chr&gt;,
+## #   sample_ &lt;chr&gt;, sex &lt;chr&gt;, age_days &lt;dbl&gt;, ethnicity &lt;chr&gt;, assay &lt;chr&gt;,
+## #   organism &lt;chr&gt;, tissue &lt;chr&gt;, tissue_harmonised &lt;chr&gt;, disease &lt;chr&gt;,
+## #   dataset_id &lt;chr&gt;, collection_id &lt;chr&gt;, cell_count &lt;int&gt;,
+## #   is_primary_data_x &lt;chr&gt;, sample_id_db &lt;chr&gt;, `_sample_name` &lt;chr&gt;, …</code></pre>
+<p>The column definition for the metadata can be found: <a href="https://stemangiola.github.io/CuratedAtlasQueryR/#cell-metadata" class="uri">https://stemangiola.github.io/CuratedAtlasQueryR/#cell-metadata</a></p>
+</div>
+<div id="explore-metadata-and-collect-pseudobulk-summarised-counts-from-curatedatlasquery" class="section level3">
+<h3>Explore metadata and collect pseudobulk summarised counts from <code>CuratedAtlasQuery</code></h3>
+<div id="explore-tissue" class="section level4">
+<h4>Explore tissue</h4>
+<pre class="r"><code>metadata &lt;- metadata |&gt; filter(tissue_harmonised == &#39;lung&#39;) |&gt; head(10000)</code></pre>
+</div>
+<div id="collect-pseudobulk-raw-counts-and-quantile-normalised-counts" class="section level4">
+<h4>Collect pseudobulk raw counts and quantile normalised counts</h4>
+<pre class="r"><code>counts &lt;- metadata |&gt; 
+  get_pseudobulk(cache_directory = my_cache, assays = c(&quot;counts&quot;,&quot;quantile_normalised&quot;) )</code></pre>
+<pre class="r"><code>counts</code></pre>
+<pre><code>## # A SummarizedExperiment-tibble abstraction: 2,970,778 × 52
+## # [90mFeatures=36229 | Samples=82 | Assays=counts, quantile_normalised[0m
+##    .feature .sample      counts quantile_normalised cell_type_harmonised file_id
+##    &lt;chr&gt;    &lt;chr&gt;         &lt;dbl&gt;               &lt;dbl&gt; &lt;chr&gt;                &lt;chr&gt;  
+##  1 A1BG     GSE122960__…     10              1289.  at2                  GSE122…
+##  2 A1BG-AS1 GSE122960__…      1                83.4 at2                  GSE122…
+##  3 A1CF     GSE122960__…      0                 0   at2                  GSE122…
+##  4 A2M      GSE122960__…      4               438.  at2                  GSE122…
+##  5 A2M-AS1  GSE122960__…      0                 0   at2                  GSE122…
+##  6 A2ML1    GSE122960__…      0                 0   at2                  GSE122…
+##  7 A2MP1    GSE122960__…      0                 0   at2                  GSE122…
+##  8 A3GALT2  GSE122960__…      0                 0   at2                  GSE122…
+##  9 A4GALT   GSE122960__…      6               705.  at2                  GSE122…
+## 10 A4GNT    GSE122960__…      0                 0   at2                  GSE122…
+## # ℹ 40 more rows
+## # ℹ 46 more variables: sample_ &lt;chr&gt;, sex &lt;chr&gt;, age_days &lt;dbl&gt;,
+## #   ethnicity &lt;chr&gt;, assay &lt;chr&gt;, organism &lt;chr&gt;, tissue &lt;chr&gt;,
+## #   tissue_harmonised &lt;chr&gt;, disease &lt;chr&gt;, dataset_id &lt;chr&gt;,
+## #   collection_id &lt;chr&gt;, cell_count &lt;int&gt;, is_primary_data_x &lt;chr&gt;,
+## #   X_sample_name &lt;chr&gt;, assay_ontology_term_id &lt;chr&gt;, development_stage &lt;chr&gt;,
+## #   development_stage_ontology_term_id &lt;chr&gt;, disease_ontology_term_id &lt;chr&gt;, …</code></pre>
+</div>
+<div id="explore-disease-samples" class="section level4">
+<h4>Explore disease samples</h4>
+<pre class="r"><code>counts |&gt; distinct(.sample, disease) |&gt; count(disease)</code></pre>
+<pre><code>## tidySummarizedExperiment says: Key columns are missing. A data frame is returned for independent data analysis.</code></pre>
+<pre><code>## # A tibble: 2 × 2
+##   disease                           n
+##   &lt;chr&gt;                         &lt;int&gt;
+## 1 idiopathic pulmonary fibrosis    68
+## 2 normal                           14</code></pre>
+</div>
+</div>
+<div id="differential-expression-analysis" class="section level3">
+<h3>Differential expression analysis</h3>
+<p>The following functions are from package<code>tidybulk</code>, taking a <code>tbl</code> input (with at least three columns for sample, feature and transcript abundance) or <code>SummarizedExperiment</code> as input.<br />
+</p>
+<ul>
+<li><code>keep_abundant()</code> returns a consistent object (to the input) with additional columns for the statistics from the hypothesis test.</li>
+<li><code>scale_abundance()</code> scales transcript abundance compansating for sequencing depth.</li>
+<li><code>reduce_dimensions()</code> calculates the reduced dimensional space of the transcript abundance.</li>
+<li><code>pivot_sample()</code> returns a <code>tbl</code> with only sample-related columns.</li>
+<li><code>test_differential_abundance()</code> performs differential transcription testing using edgeR quasi-likelihood (QLT), edgeR likelihood-ratio (LR), limma-voom, limma-voom-with-quality-weights or DESeq2.</li>
+<li><code>pivot_transcript()</code> returns a <code>tbl</code> with only transcript-related columns.</li>
+</ul>
+<div id="counts-normalisation" class="section level4">
+<h4>Counts normalisation</h4>
+<p>Visualise the difference in abundance densities before and after scaling by plotting:<br />
+</p>
+<ul>
+<li>Raw counts density</li>
+<li>Raw counts scaled density</li>
+<li>Quantile normalised density</li>
+</ul>
+<pre class="r"><code>counts |&gt; keep_abundant(factor_of_interest = disease) |&gt; 
+  scale_abundance(.subset_for_scaling = TRUE) |&gt;
+  pivot_longer(
+  cols = c(&quot;counts&quot;, &quot;quantile_normalised&quot;, &quot;counts_scaled&quot;),
+  names_to = &quot;source&quot;,
+  values_to = &quot;abundance&quot;
+) |&gt;
+  
+  # Plotting
+  ggplot(aes(x = abundance + 1, color = sample_)) +
+  geom_density() +
+  facet_wrap( ~ source) +
+  scale_x_log10() +
+  custom_theme</code></pre>
+<pre><code>## tidybulk says: the sample with largest library size GSE122960___GSM3489183___macrophage was chosen as reference for scaling</code></pre>
+<pre><code>## tidySummarizedExperiment says: A data frame is returned for independent data analysis.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/Counts_normalisation-1.png" width="960" /></p>
+<p>In the curated atlas, the distribution of the scaled counts and quantile normalised counts are not very different to each other. Comparing to raw counts, both scaling and quantile normalising make the distribution similar across samples.</p>
+</div>
+<div id="dimensionality-reduction-pca-visualisation" class="section level4">
+<h4>Dimensionality reduction PCA visualisation</h4>
+<p>Idiopathic pulmonary fibrosis (IPF) shows some degree of separation from normal in the sample, especially noticeable in certain cell types. This separation could indicate that the disease state influences the gene expression profile of these cells.</p>
+<div id="scaled-raw-counts-pca" class="section level5">
+<h5>Scaled raw counts PCA</h5>
+<pre class="r"><code># Get principal components
+counts_scal_PCA &lt;-
+  counts |&gt; 
+  keep_abundant(factor_of_interest = disease) |&gt;
+  scale_abundance() |&gt;
+  reduce_dimensions(method = &quot;PCA&quot;)</code></pre>
+<pre><code>## tidybulk says: the sample with largest library size GSE122960___GSM3489183___macrophage was chosen as reference for scaling</code></pre>
+<pre><code>## Getting the 500 most variable genes</code></pre>
+<pre><code>## Fraction of variance explained by the selected principal components</code></pre>
+<pre><code>## # A tibble: 2 × 2
+##   `Fraction of variance`    PC
+##                    &lt;dbl&gt; &lt;int&gt;
+## 1                 0.450      1
+## 2                 0.0990     2</code></pre>
+<pre><code>## tidybulk says: to access the raw results do `attr(..., &quot;internals&quot;)$PCA`</code></pre>
+<pre class="r"><code>counts_scal_PCA |&gt;
+  pivot_sample() |&gt;
+  ggplot(aes(
+    x = PC1,
+    y = PC2,
+    colour = cell_type_harmonised,
+    shape = disease
+  )) +
+  geom_point() +
+  custom_theme</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/Scaled_raw_counts_PCA-1.png" width="672" /></p>
+<p>The PCA plot indicates that same cell types tend to cluster together.</p>
+</div>
+</div>
+<div id="differential-expression-models" class="section level4">
+<h4>Differential expression models</h4>
+<pre class="r"><code>de_all &lt;- counts_scal_PCA |&gt;
+
+  # edgeR QLT
+  test_differential_abundance(
+    ~ disease + age_days + sex,
+    method = &quot;edgeR_quasi_likelihood&quot;,
+    prefix = &quot;edgerQLT_&quot;
+  ) |&gt;
+
+  # edgeR LRT
+  test_differential_abundance(
+   ~ disease + age_days + sex,
+    method = &quot;edgeR_likelihood_ratio&quot;,
+    prefix = &quot;edgerLR_&quot;
+  ) |&gt;
+
+  # limma-voom
+  test_differential_abundance(
+    ~ disease + age_days + sex,
+    method = &quot;limma_voom&quot;,
+    prefix = &quot;voom_&quot;
+  ) |&gt;
+
+  # DESeq2
+  test_differential_abundance(
+   ~ disease + age_days + sex,
+    method = &quot;deseq2&quot;,
+    prefix = &quot;deseq2_&quot;
+  )</code></pre>
+<pre><code>## =====================================
+## tidybulk says: All testing methods use raw counts, irrespective of if scale_abundance
+## or adjust_abundance have been calculated. Therefore, it is essential to add covariates
+## such as batch effects (if applicable) in the formula.
+## =====================================
+## tidybulk says: The design column names are &quot;(Intercept), diseasenormal, age_days, sexmale&quot;
+## 
+## tidybulk says: to access the raw results (fitted GLM) do `attr(..., &quot;internals&quot;)$edgeR_quasi_likelihood`
+## tidybulk says: The design column names are &quot;(Intercept), diseasenormal, age_days, sexmale&quot;
+## 
+## tidybulk says: to access the raw results (fitted GLM) do `attr(..., &quot;internals&quot;)$edgeR_likelihood_ratio`
+## tidybulk says: The design column names are &quot;(Intercept), diseasenormal, age_days, sexmale&quot;
+## 
+## tidybulk says: to access the raw results (fitted GLM) do `attr(..., &quot;internals&quot;)$limma_voom`
+## converting counts to integer mode
+## 
+##   the design formula contains one or more numeric variables with integer values,
+##   specifying a model with increasing fold change for higher values.
+##   did you mean for this to be a factor? if so, first convert
+##   this variable to a factor using the factor() function
+## 
+##   the design formula contains one or more numeric variables that have mean or
+##   standard deviation larger than 5 (an arbitrary threshold to trigger this message).
+##   Including numeric variables with large mean can induce collinearity with the intercept.
+##   Users should center and scale numeric variables in the design to improve GLM convergence.
+## 
+##   Note: levels of factors in the design contain characters other than
+##   letters, numbers, &#39;_&#39; and &#39;.&#39;. It is recommended (but not required) to use
+##   only letters, numbers, and delimiters &#39;_&#39; or &#39;.&#39;, as these are safe characters
+##   for column names in R. [This is a message, not a warning or an error]
+## 
+## estimating size factors
+## 
+##   Note: levels of factors in the design contain characters other than
+##   letters, numbers, &#39;_&#39; and &#39;.&#39;. It is recommended (but not required) to use
+##   only letters, numbers, and delimiters &#39;_&#39; or &#39;.&#39;, as these are safe characters
+##   for column names in R. [This is a message, not a warning or an error]
+## 
+## estimating dispersions
+## 
+## gene-wise dispersion estimates
+## 
+## mean-dispersion relationship
+## 
+##   Note: levels of factors in the design contain characters other than
+##   letters, numbers, &#39;_&#39; and &#39;.&#39;. It is recommended (but not required) to use
+##   only letters, numbers, and delimiters &#39;_&#39; or &#39;.&#39;, as these are safe characters
+##   for column names in R. [This is a message, not a warning or an error]
+## 
+## final dispersion estimates
+## 
+## fitting model and testing
+## 
+##   Note: levels of factors in the design contain characters other than
+##   letters, numbers, &#39;_&#39; and &#39;.&#39;. It is recommended (but not required) to use
+##   only letters, numbers, and delimiters &#39;_&#39; or &#39;.&#39;, as these are safe characters
+##   for column names in R. [This is a message, not a warning or an error]
+## 
+## -- replacing outliers and refitting for 125 genes
+## -- DESeq argument &#39;minReplicatesForReplace&#39; = 7 
+## -- original counts are preserved in counts(dds)
+## 
+## estimating dispersions
+## 
+## fitting model and testing
+## 
+##   Note: levels of factors in the design contain characters other than
+##   letters, numbers, &#39;_&#39; and &#39;.&#39;. It is recommended (but not required) to use
+##   only letters, numbers, and delimiters &#39;_&#39; or &#39;.&#39;, as these are safe characters
+##   for column names in R. [This is a message, not a warning or an error]
+## 
+## tidybulk says: to access the raw results (fitted GLM) do `attr(..., &quot;internals&quot;)$deseq2`
+## This message is displayed once per session.</code></pre>
+</div>
+<div id="comparison-of-methods" class="section level4">
+<h4>Comparison of methods</h4>
+<p>The comparison help assess how similarly each pair of tests ranks the significance of gene expression differences.</p>
+<p>The correlation coefficients between edgeR QLT and edgeR LRT, suggest a very high degree of agreement, which is expected as these methods are variations of each other under the edgeR framework. Meanwhile, correlations involving limma-voom are generally lower, indicating differing sensitivities or assumptions in the statistical models used by limma compared to edgeR or DESeq2.</p>
+<pre class="r"><code>de_all |&gt;
+  pivot_transcript() |&gt;
+  select(edgerQLT_PValue, edgerLR_PValue, voom_P.Value, deseq2_pvalue, .feature) |&gt;
+  ggpairs(1:4,
+          mapping = aes(alpha = 0.2),
+          lower = list(continuous = wrap(&quot;points&quot;, size = 0.4, alpha = 0.2)
+                       )
+          )</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/differential_expression_model_comparison-1.png" width="960" /></p>
+</div>
+<div id="volcano-plots" class="section level4">
+<h4>Volcano plots</h4>
+<pre class="r"><code># run default edgeR method
+counts_de &lt;- counts_scal_PCA |&gt;
+  test_differential_abundance(~ disease + age_days + sex )</code></pre>
+<pre><code>## tidybulk says: The design column names are &quot;(Intercept), diseasenormal, age_days, sexmale&quot;</code></pre>
+<pre><code>## tidybulk says: to access the raw results (fitted GLM) do `attr(...,
+## &quot;internals&quot;)$edgeR_quasi_likelihood`</code></pre>
+<pre class="r"><code>topgenes_symbols &lt;- counts_de |&gt;
+    pivot_transcript() |&gt;
+    arrange(PValue) |&gt;
+    head(6) |&gt; pull(.feature)
+topgenes_symbols</code></pre>
+<pre><code>## [1] &quot;RPS26&quot;  &quot;FOSB&quot;   &quot;IGHG4&quot;  &quot;FOS&quot;    &quot;BEST1&quot;  &quot;NFKBIZ&quot;</code></pre>
+<pre class="r"><code>counts_de |&gt;
+    pivot_transcript() |&gt;
+    
+    # Subset data
+    mutate(significant = FDR &lt; 0.05 &amp; abs(logFC) &gt;= 2) |&gt;
+    mutate(.feature = ifelse(.feature %in% topgenes_symbols, as.character(.feature), &quot;&quot;)) |&gt;
+    
+    # Plot
+    ggplot(aes(x = logFC, y = PValue, label = .feature)) +
+    geom_point(aes(color = significant, size = significant, alpha = significant)) +
+    geom_text_repel() +
+    
+    # Custom scales
+    custom_theme +
+    scale_y_continuous(trans = trans_reverser(&quot;log10&quot;)) +
+    scale_color_manual(values = c(&quot;black&quot;, &quot;#e11f28&quot;)) +
+    scale_size_discrete(range = c(0, 2))</code></pre>
+<pre><code>## Scale for colour is already present.
+## Adding another scale for colour, which will replace the existing scale.</code></pre>
+<pre><code>## Warning: Using size for a discrete variable is not advised.</code></pre>
+<pre><code>## Warning: Using alpha for a discrete variable is not advised.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/volcano_plot-1.png" width="672" /></p>
+<p>In the volcano plot, top genes are annotated. The IGHG4 gene shows both significant changes in expression and high fold changes.</p>
+</div>
+</div>
+<div id="analysis-of-a-single-gene-across-the-curated-data" class="section level3">
+<h3>Analysis of a single gene across the curated data</h3>
+<div id="collect-pseudobulk-counts-for-tgfb-and-muc5b-genes" class="section level4">
+<h4>Collect pseudobulk counts for TGFB and MUC5B genes</h4>
+<pre class="r"><code>my_cache &lt;- &quot;/vast/scratch/users/shen.m/CuratedAtlasQueryR/pseudobulk&quot;
+metadata &lt;- get_metadata(cache_directory = my_cache)
+metadata</code></pre>
+<pre class="r"><code>MUC5B_merged_counts &lt;- metadata |&gt; 
+  get_pseudobulk(cache_directory = my_cache, assays = c(&quot;counts&quot;, &quot;quantile_normalised&quot;), feature = &quot;MUC5B&quot;)</code></pre>
+<pre class="r"><code>MUC5B_merged_counts</code></pre>
+<pre><code>## # A SummarizedExperiment-tibble abstraction: 133,133 × 52
+## # [90mFeatures=1 | Samples=133133 | Assays=counts, quantile_normalised[0m
+##    .feature .sample      counts quantile_normalised sample_ cell_type_harmonised
+##    &lt;chr&gt;    &lt;chr&gt;         &lt;dbl&gt;               &lt;dbl&gt; &lt;chr&gt;   &lt;chr&gt;               
+##  1 MUC5B    689e2fe4f2c…   5.00                13.6 689e2f… basal_cell          
+##  2 MUC5B    689e2fe4f2c…  10.0                280.  689e2f… luminal_cell_of_pro…
+##  3 MUC5B    689e2fe4f2c…   1.00               353.  689e2f… epithelial_cell     
+##  4 MUC5B    689e2fe4f2c…   5.00              1303.  689e2f… secretory_cell      
+##  5 MUC5B    19d3f767883…  20.0               1170.  19d3f7… secretory_cell      
+##  6 MUC5B    19d3f767883…   0                    0   19d3f7… luminal_cell_of_pro…
+##  7 MUC5B    19d3f767883…   0                    0   19d3f7… epithelial_cell     
+##  8 MUC5B    19d3f767883…   0                    0   19d3f7… basal_cell          
+##  9 MUC5B    19d3f767883…   0                    0   19d3f7… neuroendocrine_cell 
+## 10 MUC5B    4164e2a99c2…   1.00                 0   4164e2… basal_cell          
+## 11 MUC5B    4164e2a99c2…   0                    0   4164e2… epithelial_cell     
+## 12 MUC5B    4164e2a99c2…  30.0              17148.  4164e2… luminal_cell_of_pro…
+## 13 MUC5B    4164e2a99c2…   0                    0   4164e2… secretory_cell      
+## 14 MUC5B    4164e2a99c2…   0                    0   4164e2… neuroendocrine_cell 
+## 15 MUC5B    bd54ab01e2d…   0                    0   bd54ab… basal_cell          
+## 16 MUC5B    bd54ab01e2d…   0                    0   bd54ab… epithelial_cell     
+## 17 MUC5B    bd54ab01e2d…   1.00               116.  bd54ab… secretory_cell      
+## 18 MUC5B    bd54ab01e2d…   0                    0   bd54ab… luminal_cell_of_pro…
+## 19 MUC5B    bd54ab01e2d…   0                    0   bd54ab… neuroendocrine_cell 
+## 20 MUC5B    9092e556e98…   0                    0   9092e5… basal_cell          
+## # ℹ 46 more variables: X_sample_name &lt;chr&gt;, assay &lt;chr&gt;,
+## #   assay_ontology_term_id &lt;chr&gt;, development_stage &lt;chr&gt;,
+## #   development_stage_ontology_term_id &lt;chr&gt;, disease &lt;chr&gt;,
+## #   disease_ontology_term_id &lt;chr&gt;, ethnicity &lt;chr&gt;,
+## #   ethnicity_ontology_term_id &lt;chr&gt;, experiment___ &lt;chr&gt;, file_id &lt;chr&gt;,
+## #   is_primary_data_x &lt;chr&gt;, organism &lt;chr&gt;, organism_ontology_term_id &lt;chr&gt;,
+## #   sample_placeholder &lt;chr&gt;, sex &lt;chr&gt;, sex_ontology_term_id &lt;chr&gt;, …</code></pre>
+<pre class="r"><code>TGFB1_merged_counts &lt;- metadata |&gt; 
+  get_pseudobulk(cache_directory = my_cache, assays = c(&quot;counts&quot;, &quot;quantile_normalised&quot;), feature = &quot;TGFB1&quot;)</code></pre>
+<pre class="r"><code>TGFB1_merged_counts</code></pre>
+<pre><code>## # A SummarizedExperiment-tibble abstraction: 133,133 × 52
+## # [90mFeatures=1 | Samples=133133 | Assays=counts, quantile_normalised[0m
+##    .feature .sample      counts quantile_normalised sample_ cell_type_harmonised
+##    &lt;chr&gt;    &lt;chr&gt;         &lt;dbl&gt;               &lt;dbl&gt; &lt;chr&gt;   &lt;chr&gt;               
+##  1 TGFB1    689e2fe4f2c… 568.                12932. 689e2f… basal_cell          
+##  2 TGFB1    689e2fe4f2c…  54.0                3038. 689e2f… luminal_cell_of_pro…
+##  3 TGFB1    689e2fe4f2c…  20.0               11881. 689e2f… epithelial_cell     
+##  4 TGFB1    689e2fe4f2c…  12.0                3282. 689e2f… secretory_cell      
+##  5 TGFB1    19d3f767883…  69.0                4600. 19d3f7… secretory_cell      
+##  6 TGFB1    19d3f767883…  13.0                2144. 19d3f7… luminal_cell_of_pro…
+##  7 TGFB1    19d3f767883… 166.                14872. 19d3f7… epithelial_cell     
+##  8 TGFB1    19d3f767883… 247.                15054. 19d3f7… basal_cell          
+##  9 TGFB1    19d3f767883…   0                     0  19d3f7… neuroendocrine_cell 
+## 10 TGFB1    4164e2a99c2… 446.                10388. 4164e2… basal_cell          
+## 11 TGFB1    4164e2a99c2…  17.0                6691. 4164e2… epithelial_cell     
+## 12 TGFB1    4164e2a99c2…   1.00                310. 4164e2… luminal_cell_of_pro…
+## 13 TGFB1    4164e2a99c2…   3.00               2979. 4164e2… secretory_cell      
+## 14 TGFB1    4164e2a99c2…   0                     0  4164e2… neuroendocrine_cell 
+## 15 TGFB1    bd54ab01e2d… 544.                15553. bd54ab… basal_cell          
+## 16 TGFB1    bd54ab01e2d… 270.                11032. bd54ab… epithelial_cell     
+## 17 TGFB1    bd54ab01e2d…  10.0                3354. bd54ab… secretory_cell      
+## 18 TGFB1    bd54ab01e2d…   0                     0  bd54ab… luminal_cell_of_pro…
+## 19 TGFB1    bd54ab01e2d…   1.00              16705. bd54ab… neuroendocrine_cell 
+## 20 TGFB1    9092e556e98… 281.                 7546. 9092e5… basal_cell          
+## # ℹ 46 more variables: X_sample_name &lt;chr&gt;, assay &lt;chr&gt;,
+## #   assay_ontology_term_id &lt;chr&gt;, development_stage &lt;chr&gt;,
+## #   development_stage_ontology_term_id &lt;chr&gt;, disease &lt;chr&gt;,
+## #   disease_ontology_term_id &lt;chr&gt;, ethnicity &lt;chr&gt;,
+## #   ethnicity_ontology_term_id &lt;chr&gt;, experiment___ &lt;chr&gt;, file_id &lt;chr&gt;,
+## #   is_primary_data_x &lt;chr&gt;, organism &lt;chr&gt;, organism_ontology_term_id &lt;chr&gt;,
+## #   sample_placeholder &lt;chr&gt;, sex &lt;chr&gt;, sex_ontology_term_id &lt;chr&gt;, …</code></pre>
+<p>The query illustrates the expression of a single gene across 133,133 pseudo samples, encompassing 156 cell types and 45 organs.</p>
+</div>
+<div id="visualising-genes-expression-in-cells-and-tissues" class="section level4">
+<h4>Visualising genes expression in cells and tissues</h4>
+<div id="muc5b-gene" class="section level5">
+<h5>MUC5B gene</h5>
+<p>MUC5B (Mucin 5B) is known to play a crucial role in the production of mucus, which is essential for protecting and lubricating the surfaces of the respiratory, digestive, and reproductive systems.<br />
+* High expression in Esophagus and Trachea tissue is consistent with the role of MUC5B in mucus production, which is essential for protecting the respiratory tract by clearing pathogens and particulates.<br />
+* Goblet and Secretory cells are known for their role in mucus secretion, which aligns with the high expression of MUC5B.</p>
+<pre class="r"><code>MUC5B_merged_counts |&gt; 
+  filter(quantile_normalised != 0) |&gt;
+  group_by(tissue_harmonised) |&gt;
+  mutate(median_expression = median(quantile_normalised)) |&gt;
+  ungroup() |&gt;
+  ggplot(aes(
+    x = fct_reorder(tissue_harmonised, median_expression, .desc = TRUE),
+    y = quantile_normalised,
+    fill = tissue_harmonised
+  )) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 1)) +
+  ggtitle(&quot;MUC5B expression across tissues&quot;)</code></pre>
+<pre><code>## tidySummarizedExperiment says: A data frame is returned for independent data analysis.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/MUC5B_expression_across_tissue-1.png" width="1920" /></p>
+<pre class="r"><code>MUC5B_merged_counts |&gt; 
+  filter(quantile_normalised != 0) |&gt;
+  group_by(cell_type_harmonised) |&gt;
+  mutate(median_expression = median(quantile_normalised)) |&gt;
+  ungroup() |&gt;
+  ggplot(aes(x = fct_reorder(cell_type_harmonised, median_expression, .desc = TRUE), 
+             y = quantile_normalised, 
+             fill = cell_type_harmonised)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 2)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1)) +
+  ggtitle(&quot;MUC5B expression across cell types&quot;)</code></pre>
+<pre><code>## tidySummarizedExperiment says: A data frame is returned for independent data analysis.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/MUC5B_expression_across_cell_types-1.png" width="2880" /></p>
+</div>
+<div id="tgfb1-gene" class="section level5">
+<h5>TGFB1 gene</h5>
+<p>TGFB1 (Transforming Growth Factor Beta 1) play a crucial role in various cellular processes, including cell growth, differentiation, apoptosis, and immune response. The variability in its expression across different cell types highlights its diverse roles in different cellular contexts.<br />
+The boxplots indicate an overview of TGFB1 gene expression across various cell types and tissues:<br />
+* High expression in Mucosa and Skeletal Muscle suggests that the TGFB1 gene is important for maintaining structural integrity and responding to injuries.<br />
+* High expression in Megakaryocytes and Platelets suggests that the TGFB1 gene is essential for blood clotting and wound healing.</p>
+<pre class="r"><code>TGFB1_merged_counts |&gt;
+  filter(quantile_normalised != 0) |&gt;
+  group_by(tissue_harmonised) |&gt;
+  mutate(median_expression = median(quantile_normalised)) |&gt;
+  ungroup() |&gt;
+  ggplot(aes(
+    x = fct_reorder(tissue_harmonised, median_expression, .desc = TRUE),
+    y = quantile_normalised,
+    fill = tissue_harmonised
+  )) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 1)) +
+  ggtitle(&quot;TGFB1 expression across tissues&quot;)</code></pre>
+<pre><code>## tidySummarizedExperiment says: A data frame is returned for independent data analysis.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/TGFB1_expression_across_tissue-1.png" width="1920" /></p>
+<pre class="r"><code>TGFB1_merged_counts |&gt;
+  filter(quantile_normalised != 0) |&gt;
+  group_by(cell_type_harmonised) |&gt;
+  mutate(median_expression = median(quantile_normalised)) |&gt;
+  ungroup() |&gt;
+  ggplot(aes(x = fct_reorder(cell_type_harmonised, median_expression, .desc = TRUE), 
+             y = quantile_normalised, 
+             fill = cell_type_harmonised)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10() +
+  custom_theme +
+  guides(fill = guide_legend(ncol = 3)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1)) +
+  ggtitle(&quot;TGFB1 expression across cell types&quot;)</code></pre>
+<pre><code>## tidySummarizedExperiment says: A data frame is returned for independent data analysis.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/TGFB1_expression_across_cell_types-1.png" width="2880" /></p>
+</div>
+</div>
+</div>
+<div id="signature-calculation-across-the-curated-atlas" class="section level3">
+<h3>Signature calculation across the curated atlas</h3>
+<pre class="r"><code>meta &lt;- metadata |&gt; filter(tissue_harmonised == &quot;lung&quot; &amp; 
+                           cell_type_harmonised == &quot;cd8 tem&quot;)
+sig_calc_pseudobulk &lt;- meta |&gt; get_pseudobulk(cache_directory = my_cache, assays = &quot;counts&quot;)</code></pre>
+<pre class="r"><code>sig_calc_pseudobulk</code></pre>
+<pre><code>## # A SummarizedExperiment-tibble abstraction: 17,027,630 × 51
+## # [90mFeatures=36229 | Samples=470 | Assays=counts[0m
+##    .feature .sample   counts cell_type_harmonised file_id sample_ sex   age_days
+##    &lt;chr&gt;    &lt;chr&gt;      &lt;dbl&gt; &lt;chr&gt;                &lt;chr&gt;   &lt;chr&gt;   &lt;chr&gt;    &lt;dbl&gt;
+##  1 A1BG     d30b7689… 150.   cd8 tem              07beec… d30b76… male     13140
+##  2 A1BG-AS1 d30b7689…   8.94 cd8 tem              07beec… d30b76… male     13140
+##  3 A1CF     d30b7689…   0    cd8 tem              07beec… d30b76… male     13140
+##  4 A2M      d30b7689…  12.3  cd8 tem              07beec… d30b76… male     13140
+##  5 A2M-AS1  d30b7689…   0    cd8 tem              07beec… d30b76… male     13140
+##  6 A2ML1    d30b7689…   3.99 cd8 tem              07beec… d30b76… male     13140
+##  7 A2MP1    d30b7689…   0    cd8 tem              07beec… d30b76… male     13140
+##  8 A3GALT2  d30b7689…   0    cd8 tem              07beec… d30b76… male     13140
+##  9 A4GALT   d30b7689…   7.86 cd8 tem              07beec… d30b76… male     13140
+## 10 A4GNT    d30b7689…   0    cd8 tem              07beec… d30b76… male     13140
+## # ℹ 40 more rows
+## # ℹ 43 more variables: ethnicity &lt;chr&gt;, assay &lt;chr&gt;, organism &lt;chr&gt;,
+## #   tissue &lt;chr&gt;, tissue_harmonised &lt;chr&gt;, disease &lt;chr&gt;, dataset_id &lt;chr&gt;,
+## #   collection_id &lt;chr&gt;, cell_count &lt;int&gt;, is_primary_data_x &lt;chr&gt;,
+## #   X_sample_name &lt;chr&gt;, assay_ontology_term_id &lt;chr&gt;, development_stage &lt;chr&gt;,
+## #   development_stage_ontology_term_id &lt;chr&gt;, disease_ontology_term_id &lt;chr&gt;,
+## #   ethnicity_ontology_term_id &lt;chr&gt;, experiment___ &lt;chr&gt;, …</code></pre>
+<pre class="r"><code># load calculated signature 
+scores &lt;- read.table(&quot;/Users/shen.m/Documents/GitHub/tidyomicsBlog/blog/content/post/2024-05-17-CuratedAtalasQueryR-pseudobulk/data/ResExhMarkers_CD8_CLs_LCM.txt&quot;, header = TRUE, sep = &quot;\t&quot;)
+scores |&gt; head()</code></pre>
+<pre><code>##    Res_Pct  Exh_Pct Blood_Pct    gene CLsPass LcmPass CancerPass Marker
+## 1 12.40547 11.80152 10.246697   ZFP36   FALSE   FALSE      FALSE    Res
+## 2 11.96635 11.79224  9.788263    CD69    TRUE   FALSE       TRUE    Res
+## 3 11.91051 11.84514 11.436771    EIF1   FALSE   FALSE      FALSE    Res
+## 4 11.82417 10.70216  7.373063     FOS   FALSE   FALSE      FALSE    Res
+## 5 11.15705 11.07872 10.402976    KLF6   FALSE   FALSE      FALSE    Res
+## 6 10.98749 10.97823  8.834414 TNFAIP3   FALSE   FALSE      FALSE    Res</code></pre>
+<p>The signature represents T cell exhaustion, referenced in the paper: <a href="https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-018-2435-4" class="uri">https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-018-2435-4</a></p>
+<pre class="r"><code>my_matrix &lt;- sig_calc_pseudobulk@assays@data$counts
+
+rownames(my_matrix) &lt;- rownames(sig_calc_pseudobulk)
+colnames(my_matrix) &lt;- colnames(sig_calc_pseudobulk)
+
+my_matrix[rowSums(my_matrix) != 0 |
+            rownames(my_matrix) %in% scores$gene, , drop = FALSE] |&gt;
+  as.matrix() |&gt;
+  rankGenes() |&gt;
+  simpleScore(
+    upSet = scores$gene,
+    knownDirection = T,
+    centerScore = F
+  ) |&gt;
+  as_tibble(rownames = &quot;sample_&quot;) |&gt; left_join(
+    sig_calc_pseudobulk |&gt; tidybulk::select(sample_, disease, cell_type_harmonised, sample_identifier),
+    by = c(&quot;sample_&quot; = &quot;sample_identifier&quot;)
+  )  |&gt; ggplot(aes(x = disease, y = TotalScore, fill = disease)) + geom_jitter() + custom_theme</code></pre>
+<pre><code>## tidySummarizedExperiment says: Key columns are missing. A data frame is returned for independent data analysis.</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/Signature_calculation-1.png" width="672" /></p>
+<p>This plot visualises the total score of a signature that represents T cell exhaustion across different lung-related diseases and conditions. Sarcoidosis shows more concentrated and relatively higher score ranges, indicating less variability among the samples compared to other diseases. This suggests a more uniform expression of the signature being analysed within these specific conditions.</p>
+</div>
