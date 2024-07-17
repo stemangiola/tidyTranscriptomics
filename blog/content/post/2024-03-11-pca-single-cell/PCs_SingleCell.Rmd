@@ -1,0 +1,167 @@
+---
+title: "Interpreting PCs in relation to clusters in single cell analysis"
+author: "Pau Paiz"
+date: "2024-03-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE) 
+```
+
+Single-cell RNA sequential analysis is implemented for cell types identification both existing and novel, tumor types classification, investigation of heterogeneity in different cells, and cell fate prediction and depiction. In this context, an unsupervised learning method such as single-cell clustering represents an important approach to help execute these applications, since it is a key component of cell identification and characterization of gene expression patterns. The upstream data processing includes quality control (QC), normalization and dimension reduction. There are several dimension reduction methods, but here we will focus on principal components analysis (PCA) due to its simplicity and efficiency. The dimension reduction step is important because it reduces the computational work in further steps of clustering, reduces noise and enables more efficient data plotting.
+
+Clustering is a tool to explore data, and its main objective is to summarize complex scRNA-seq data to make it easier to understand for humans. This is achieved by computing euclidean distances across genes in order to identify cells with similar transcriptomic profiles, which allows us to describe population heterogeneity. Regardless of the method used, clustering is a critical step for extracting biological insights from scRNA-seq data. In R, the Seurat package is used for QC and exploration of single-cell RNA-seq data. Here, we will use Seurat as well as Tidyverse packages for the analysis.This post is inspired by Seurat's own clustering tutorial available [here](https://satijalab.org/seurat/articles/pbmc3k_tutorial.html).
+
+```{r results = FALSE}
+library(Seurat)
+library(tidyverse)
+library(GEOquery)
+
+# set seed for reproducibility
+set.seed(1234)
+```
+
+The dataset we will be working with is from Peripheral Blood Mononuclear Cells (PBMC) freely available from 10X Genomics. It consists of 2,700 single cells sequenced on the Illumina NextSeq 500. We can read it in using the `Read10X` function.
+
+```{r}
+#Read data
+pbmc <- Read10X("./filtered_gene_bc_matrices/hg19/")
+```
+
+It is in dgCmatrix format so we need to cast it as a Seurat object. We will keep all the features that are expressing at least 3 cells, keep all those cells that have at least 200 features or genes.
+
+```{r}
+pbmc <- CreateSeuratObject(counts= pbmc, project= "pbmc", min.cells=3, min.features=200)
+```
+
+## Quality control metrics
+In this step we will filter out low quality cells. It is important to be looking at the number of genes in a cell (`nFeature_RNA`) and the number of total molecules (`nCount_RNA`). This parameters can give us an idea of thequality of the cell because a poor quality cell would have low number of genes or molecules detected. We canalso have an extremely high number of genes or molecules detected due to doublets or multiple cells being sequenced together. The % of mitochondrial genes is also important because in dying or low quality cells we can see higher mitochondrial gene contamination.
+
+```{r}
+View(pbmc@meta.data)
+```
+
+Let's calculate the percentage of mitochondrial genes with the function `PercentageFeatureSet`, for this function we need to provide a pattern. We are going to calculate the % in all the genes that start with MT.
+```{r}
+pbmc <- PercentageFeatureSet(pbmc, pattern= "^MT-", col.name = "percent.mt")
+View(pbmc@meta.data)
+```
+
+We can visualize this QC metrics as a violin plot, in features we need to include all the columns that we want to visualize.
+```{r}
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+```
+
+In the *Percent.mt* graph we can see that the cells that have higher mitochondrial percentage and that are disperse are the ones that need to be filtered out.
+
+We can also see the features together with the `FeatureScatter` function which allows us to plot two metrics.
+```{r}
+FeatureScatter(pbmc, feature2= "nFeature_RNA", feature1 = "nCount_RNA")+
+  geom_smooth(method = 'lm')
+```
+
+In this plot we are plotting the **number of genes** on the Y axes, and the **number of molecules** in the X axes. A good quality dataset should follow the straight line, we can see that the majority of the data follow the line but we can see some sparse points that need to be filtered.
+
+## Filtering data
+Now we need to filter the data, in this case we will set the boundaries to have the number of genes greater than 400, the number of molecules up to 2000 and the mitochondrial percentage minor to 5%.
+In the plot we can see the difference with the cells already filtered out.
+
+```{r}
+pbmc <- subset(pbmc, subset= nFeature_RNA>400 & nCount_RNA <2000 & percent.mt <5)
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+pbmc
+```
+
+## Data normalization
+Now we need to do data normalization in order to be able to compare gene expression across different cells. The function `NormalizeData` does this procedure, and here *normalization.method = "LogNormalize"*, and *scale.factor = 10000* are the default values.
+```{r}
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+Next, we are going to select the features that show high cell to cell variation, so we will perform feature selection with the `FindVariableFeatures` function. *Selection.method = "vst", nfeatures = 2000* are the default values.
+```{r}
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+```
+
+We can visualize this top features with the `VariableFeaturePlot` function.
+```{r}
+VariableFeaturePlot(pbmc)
+```
+
+In red we can see the variable features, the points that are higher in the plot are the top variable features, and the points in black are the non-variable features.
+
+## Data scaling
+This step converts the absolute expression measurements to relative concentrations and simultaneously removes efficiency noise, we can do this with the `ScaleData` function. We are going to select all the genes as features, the names of all genes will be extracted from the Seurat object.
+```{r}
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features= all.genes)
+```
+
+## Perform linear dimensionality reduction (PCA) on the scaled data
+It is important to perform PCA on scRNA-Seq data because the real dimensionality of the data is much lower than the number of genes. For example, many genes are co-expressed or highly correlated suggesting the cells expressing those genes belong to similar celltypes. Sometimes technical noise is a significant source of variation in the data so it might be captured by some of the principal components. Researchers often have to decide which components to consider as representing biological signal versus technical noise, which can be a challenging task. We will run PCA with the `RunPCA` function, we just need to provide the Seurat object.
+
+```{r}
+pbmc <- RunPCA(pbmc)
+```
+
+## Examine and visualize PCA results
+Here we will see the top 5 principal components, we can change the number of PCs we want to see by changing the number in *nfeatures*. We will also see the features that have negative and positive PCs scores.
+```{r}
+print(pbmc[["pca"]], dims= 1:3, nfeatures = 5)
+```
+
+Another way of visualize the PCs is with a Heatmap. We can do this with the `DimHeatmap` function, we can change the number of PCs by changing the number in *dmis*. Here we are plotting 500 cells.
+```{r}
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+```
+
+The heatmap is colored by the PCs scores and we can see the features that exhibit heterogeneity.
+
+## Determine the dimensionality of the data
+Now we are going to choose only the statistical significant PCs that capture the majority of the signal in a downstream analysis. The elbow plot shows an elbow after which the PCs do not vary much in the % of variance. It is better to use too many PCs rather than too few since this could affect the downstream analysis.
+
+```{r}
+ElbowPlot(pbmc)
+#it only runs the first 20 cps by default use function below if you want to customize this
+#ElbowPlot(pbmc, ndims = 50, reduction = "pca")
+```
+
+Here we can see that the point in which the elbow is formed is around 4.
+
+## Clustering
+We want to cluster similar cells, with similar feature expression patterns. For that we use the function `FindNeighbors` with the 4 PCs
+```{r}
+pbmc <- FindNeighbors(pbmc, dims= 1:4)
+```
+Now we want to assign the cells to the clusters. For that we can use the function `FindClusters`. Here, resolution is the granularity of the clusters, the lower the number, the lower the clusters. Tools such as [Clustree](https://github.com/lazappi/clustree) and [sigclust2](https://github.com/pkimes/sigclust2) can help you select the resolution granularity. In this example we will go with 0.5.
+```{r}
+pbmc <- FindClusters(pbmc, resolution= 0.5)
+```
+Next we are going to visualize how many clusters do we have for each resolution so that we can choose the resolution that works best. We are going to do that with `DimPlot`, grouping the cells by resolution, starting with resolution 0.1, then with resolution 0.3
+```{r}
+DimPlot(pbmc, group.by = "RNA_snn_res.0.5", label = TRUE)
+```
+
+## Setting identity of clusters
+
+Below we are assigning each cell to the clusters we found.
+```{r}
+Idents(pbmc) <- "RNA_snn_res.0.5"
+head(Idents(pbmc), 5)
+```
+
+## Non-linear dimensionality reduction
+We can then see what cells are similar to each other using non-linear dimensional reduction techniques such as UMAP.
+```{r}
+pbmc <- RunUMAP(pbmc, dims= 1:20)
+DimPlot(pbmc, reduction = "umap", label = TRUE, repel = TRUE)
+```
+
+There are many resources that can help you interpret UMAPs.[Here](https://alleninstitute.org/resource/what-is-a-umap/) is one example. In the next tutorial on Batch effects we will see how to make use of this technique.
+
+## References
+- Seurat Developers. (n.d.). Guided Tutorial: Analyzing PBMC scRNA-seq data. Satija Lab. Retrieved from https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+- Seth S, Mallik S, Bhadra T, Zhao Z. Dimensionality Reduction and Louvain Agglomerative Hierarchical Clustering for Cluster-Specified Frequent Biomarker Discovery in Single-Cell Sequencing Data. Front Genet. 2022 Feb 7;13:828479. doi: 10.3389/fgene.2022.828479. PMID: 35198011; PMCID: PMC8859265.
+- Zhang S, Li X, Lin J, Lin Q, Wong KC. Review of single-cell RNA-seq data clustering for cell-type identification and characterization. RNA. 2023 May;29(5):517-530. doi: 10.1261/rna.078965.121. Epub 2023 Feb 3. PMID: 36737104; PMCID: PMC10158997.
+- Amezquita R, Lun A, Hicks S, Gottardo S, 2021. Bioconductor, Source: <https://github.com/OSCA-source/OSCA.basic>

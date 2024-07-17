@@ -1,0 +1,119 @@
+---
+title: "Batch Effect Visualization"
+author: "Pau Paiz"
+date: "2024-03-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE) 
+```
+
+```{r library calls, results = FALSE}
+library(Seurat)
+library(SeuratData)
+library(harmony)
+library(tidyverse)
+library(ggplot2)
+
+# set seed for reproducibility
+set.seed(1234)
+```
+
+One important step in single-cell RNA-Seq data analysis is batch correction. Its importance lies in the fact that batch effects occur when the variation in data is caused by technical factors instead of biological factors. Technical factors can result from using different sequencing platforms, capturing times, reagents, laboratories, and in general from experimental designs and handling. They occur in batches because they affect a group of samples that are processed differently in contrast to other samples or data. Moreover, batch effects can be highly nonlinear, which makes it difficult to align the datasets and keep biological variations.These batch effects can lead to erroneous conclusions. But, how do we detect batch effects? 
+
+There are various methods to detect them, however two simple ways are dissecting PCA and clusters. 
+
+Here we will detect batch effects from clusters. To do so, we will run clustering analysis and compare UMAP plots before and after batch correction. If there is batch effect in data, we will see in the first plot that cells from different batches will cluster together. After we perform batch correction we shouldn’t see that fragmentation.
+
+Various algorithms are being used to perform batch correction, three of the most commonly used are:
+1. Mutual Nearest Neighbor (MNN)
+2. canonical correlation analysis (CCA)
+3. [Harmony](https://github.com/immunogenomics/harmony)
+
+Here we will use [Harmony](https://portals.broadinstitute.org/harmony/index.html), an algorithm that projects cells into a shared embedding so that they group together by cell type rather than dataset-specific conditions. The dataset we will be working with is from Peripheral Blood Mononuclear Cells (PBMC) from 8 lupus patients that were split into stimulated and control groups. The stimulated group was treated with interferon-beta therapy. 
+
+```{r}
+InstallData("ifnb")
+LoadData("ifnb")
+str(ifnb)
+```
+
+## Quality control metrics
+In this step we will filter out low quality cells. It is important to be looking at the number of genes in a cell (`nFeature_RNA`) and the number of total molecules (`nCount_RNA`). This parameters can give us an idea of thequality of the cell because a poor quality cell would have low number of genes or molecules detected. We can also have an extremely high number of genes or molecules detected due to doublets or multiple cells being sequenced together. The % of mitochondrial genes is also important because in dying or low quality cells we can see higher mitochondrial gene contamination.
+
+```{r}
+ifnb@images <- list()
+ifnb$mito.percent <- PercentageFeatureSet(ifnb, pattern = '^MT-')
+View(ifnb@meta.data)
+ifnb <- UpdateSeuratObject(ifnb)
+
+# filter out cells according to your desired properties
+ifnb.filtered <- subset(ifnb, subset = nCount_RNA > 800 &
+                          nFeature_RNA > 200 & 
+                          mito.percent < 5)
+```
+
+## Data normalization
+Now we need to do data normalization in order to be able to compare gene expression across different cells. The function `NormalizeData` does this procedure, and here *normalization.method = "LogNormalize"*, and *scale.factor = 10000* are the default values.
+
+```{r}
+# standard workflow steps
+ifnb.filtered <- NormalizeData(ifnb.filtered)
+ifnb.filtered <- FindVariableFeatures(ifnb.filtered)
+ifnb.filtered <- ScaleData(ifnb.filtered)
+ifnb.filtered <- RunPCA(ifnb.filtered)
+ElbowPlot(ifnb.filtered)
+# if below function gives you an error downgrade to Matrix 1.6-1 
+# remotes::install_version("Matrix", version = "1.6-1")
+ifnb.filtered <- RunUMAP(ifnb.filtered, dims = 1:20)
+```
+
+To start, lets plot the data again with the DimPlot function and group the cells by their origin identity to identify the cells from each repeat.
+
+```{r}
+before <- DimPlot(ifnb.filtered, reduction = 'umap', group.by = 'stim')
+before
+```
+
+In the plot we can see that the cells were not well integrated into each other since they are clearly clustering by conditions (CTRL vs STIM). To perform data integration we can use [Harmony](https://portals.broadinstitute.org/harmony/index.html) by specifying what variable we want to use to perform the integration. In this case it will be based on the condition, which is stored in `stim`.
+
+```{r}
+# run Harmony -----------
+ifnb.harmony <- ifnb.filtered %>%
+  # below will return corrected dimensionality values / embeddings
+  RunHarmony(group.by.vars = 'stim', plot_convergence = FALSE)
+```
+
+Below you can see in addition to the PCA and UMAP embeddings, Harmony adds a slot with its batch-corrected values. 
+```{r}
+ifnb.harmony@reductions
+```
+We can always access and get the embeddings we are interested with the functions below. You can see each cell will have corresponding Harmony values. 
+```{r}
+ifnb.harmony.embed <- Embeddings(ifnb.harmony, "harmony")
+ifnb.harmony.embed[1:10,1:10]
+```
+
+```{r}
+# run UMAP and clustering using Harmony embeddings instead of PCA
+ifnb.harmony <- ifnb.harmony %>%
+  RunUMAP(reduction = 'harmony', dims = 1:20) %>%
+  FindNeighbors(reduction = "harmony", dims = 1:20) %>%
+  FindClusters(resolution = 0.5)
+```
+
+Finally, lets compare the results from the previous workflow and the results after data integration. For that we will plot the two UMAPs with the `DimPlot` function. Note that we are using the updated umap which was computed using the Harmony values. As you can see, there is overlap between cells from both conditions meaning our integration was performed successfully. 
+
+```{r}
+# visualize 
+after <- DimPlot(ifnb.harmony, reduction = 'umap', group.by = 'stim')
+before|after
+```
+
+## References
+- Tutorial code is from [Bioinformagician](https://github.com/kpatel427/YouTubeTutorials/blob/main/singleCell_integrate_harmony.R).
+- Tran, H.T.N., Ang, K.S., Chevrier, M. et al. A benchmark of batch-effect correction methods for single-cell RNA sequencing data. Genome Biol 21, 12 (2020). https://doi.org/10.1186/s13059-019-1850-9
+- Batch effect corrections, (2023), 10X Genomics, Source: <https://www.10xgenomics.com/resources/analysis-guides/introduction-batch-effect-correction>
+- Hoffman p. Introduction to scRNA-seq integration, (2023), Source: <https://satijalab.org/seurat/articles/integration_introduction.html>
+

@@ -24,7 +24,10 @@ Depends:
 Imports:
     tidybulk,
     tidyseurat,
-    sccomp
+    sccomp,
+    Seurat,
+    SeuratData,
+    harmony
 Suggests:
     knitr,
     rmarkdown,
@@ -46,10 +49,10 @@ Suggests:
     survival,
     dittoSeq,
     GGally,
-    tidygate,
-    Seurat
+    tidygate
 Remotes:
-    stemangiola/tidygate
+    stemangiola/tidygate,
+    satijalab/seurat-data
 Biarch: true
 biocViews: RNASeq, DifferentialExpression, GeneExpression, Normalization, Clustering, QualityControl, Sequencing, Transcription, Transcriptomics
 URL: https://tidyomics.github.io/tidyomicsBlog/
